@@ -4,6 +4,8 @@
 # =========================================================
 
 name: "Gen 4.5_armv1"
+# This sets the top-level Run Name, which is what the script can actually find.
+run-name: Vucar Job - ${{ github.event.inputs.run_uuid }}
 
 on:
   workflow_dispatch:
@@ -26,7 +28,8 @@ on:
 
 jobs:
   compress-video:
-    name: Process Video - ${{ github.event.inputs.run_uuid }}
+    # The UUID is no longer needed here. We can simplify this.
+    name: Process Video
     runs-on: ubuntu-24.04-arm
 
     env:
@@ -94,7 +97,7 @@ jobs:
         if: github.event.inputs.upload_url != ''
         run: |
           echo "-> Downloading asset from URL: ${{ github.event.inputs.upload_url }}"
-          curl --fail -L -o encrypted_input.gpg "${{ github.event.inputs.upload_url }}"
+          curl --fail -L -X POST -o encrypted_input.gpg "${{ github.event.inputs.upload_url }}"
           echo "-> Download complete. File saved as 'encrypted_input.gpg'."
 
       - name: "4. Decrypt Input File"
