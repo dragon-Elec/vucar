@@ -11,6 +11,7 @@ from vucar.core.video import get_file_size, restore_metadata
 from vucar.core.security import sanitize_and_encrypt_video, decrypt_file
 import tempfile
 import os
+import uuid
 import tempfile
 
 console = Console()
@@ -111,10 +112,12 @@ class GitHubBackend(Backend):
             console.print("[bold red]Critical: Command 'curl' not found in PATH.[/bold red]")
             return None
 
+    # --- MODIFICATION START: _trigger_workflow_run ---
     def _trigger_workflow_run(
         self,
         ffmpeg_options_json: str,
         output_filename_base: str,
+        run_uuid: str,  # Add this new parameter
         release_tag: str | None = None,
         upload_url: str | None = None,
     ) -> bool:
@@ -127,6 +130,7 @@ class GitHubBackend(Backend):
             "gh", "workflow", "run", self.workflow_file,
             "--repo", self.repo,
             "--ref", self.default_branch,
+            "-f", f"run_uuid={run_uuid}",  # Pass the UUID as an input
             "-f", f"ffmpeg_options={ffmpeg_options_json}",
             "-f", f"output_filename_base={output_filename_base}"
         ]
@@ -151,58 +155,64 @@ class GitHubBackend(Backend):
         except FileNotFoundError:
             console.print("[bold red]Critical: Command 'gh' not found in PATH.[/bold red]")
             return False
+    # --- MODIFICATION END: _trigger_workflow_run ---
 
-    def _monitor_workflow_run(self) -> str | None:
+    # --- REPLACEMENT START: _monitor_workflow_run ---
+    def _monitor_workflow_run(self, run_uuid: str) -> str | None:
         """
-        Waits for the latest workflow run to complete, retrying on network failure,
-        while showing the interactive gh watch output.
+        Waits for the specific workflow run, identified by its UUID, to appear and complete.
+        This is a reliable method that avoids race conditions.
         Returns the run ID on success.
         """
-        console.print("  -> ⏳ Waiting for workflow to complete... (This may take a while)")
+        console.print(f"  -> ⏳ Locating and monitoring workflow run ([bold magenta]{run_uuid}[/bold magenta])...")
         
-        time.sleep(8)
-
-        max_retries, delay = 3, 5
-        run_id = None 
-
-        for attempt in range(1, max_retries + 1):
+        run_id = None
+        # We will try for up to 60 seconds to find the run after triggering it.
+        max_find_retries, find_delay = 12, 5
+        
+        # Phase 1: Find the run ID using the UUID. The workflow needs a few seconds to be created.
+        for attempt in range(1, max_find_retries + 1):
             try:
-                if not run_id:
-                    run_list_cmd = [
-                        "gh", "run", "list", "--workflow", self.workflow_file, "--repo", self.repo,
-                        "--limit", "1", "--json", "databaseId,url", "-q", ".[0]"
-                    ]
-                    latest_run_json_str = subprocess.check_output(run_list_cmd, text=True).strip()
-                    
-                    if not latest_run_json_str or latest_run_json_str == "null":
-                        raise ValueError("Could not retrieve latest workflow run details.")
-                    
-                    latest_run = json.loads(latest_run_json_str)
-                    run_id = str(latest_run['databaseId'])
-                    run_url = latest_run['url']
-                    
-                    console.print(f"     [dim]Monitoring Run ID {run_id}[/dim]")
+                # This command is the core of the solution. It asks the GitHub API for runs
+                # and uses `jq` to filter for the one whose name contains our unique ID.
+                find_cmd = [
+                    "gh", "api", f"repos/{self.repo}/actions/runs",
+                    "--jq", f'.workflow_runs[] | select(.name | contains("{run_uuid}")) | .id'
+                ]
+                
+                result = subprocess.run(find_cmd, capture_output=True, text=True, check=True)
+                found_id = result.stdout.strip()
+                
+                if found_id:
+                    run_id = found_id
+                    console.print(f"     [green]Located Run ID:[/green] {run_id}")
+                    # Get the URL for user convenience
+                    run_url_cmd = ["gh", "run", "view", run_id, "--repo", self.repo, "--json", "url", "-q", ".url"]
+                    run_url = subprocess.check_output(run_url_cmd, text=True).strip()
                     console.print(f"     [dim]URL: {run_url}[/dim]")
+                    break # Exit the loop once the run is found
+                
+                time.sleep(find_delay) # Wait and retry if not found yet
 
-                watch_cmd = ["gh", "run", "watch", run_id, "--repo", self.repo, "--exit-status"]
-                subprocess.run(watch_cmd, check=True)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[yellow]Searching for run (attempt {attempt})...[/yellow]")
+                time.sleep(find_delay)
+        
+        if not run_id:
+            console.print("[bold red]Fatal: Could not find the triggered workflow run after multiple attempts.[/bold red]")
+            return None
 
-                console.print("     [green]Workflow finished.[/green]")
-                return run_id
-
-            except (subprocess.CalledProcessError, ValueError) as e:
-                if attempt < max_retries:
-                    console.print(f"[yellow]Monitoring attempt {attempt} failed. Retrying in {delay}s...[/yellow]")
-                    time.sleep(delay)
-                    delay *= 2
-                else:
-                    console.print(f"[bold red]Monitoring failed after {max_retries} attempts.[/bold red]")
-                    error_message = e.stderr.decode().strip() if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
-                    if error_message:
-                        console.print(f"[dim]{error_message}[/dim]")
-                    return None
-                    
-        return None
+        # Phase 2: Now that we have the correct ID, watch it to completion.
+        try:
+            console.print("     [dim]Run located. Watching for completion... (This may take a while)[/dim]")
+            watch_cmd = ["gh", "run", "watch", run_id, "--repo", self.repo, "--exit-status"]
+            subprocess.run(watch_cmd, check=True)
+            console.print("     [green]Workflow finished.[/green]")
+            return run_id
+        except subprocess.CalledProcessError:
+            console.print("[bold red]Workflow run failed. See the link above for details.[/bold red]")
+            return None
+    # --- REPLACEMENT END: _monitor_workflow_run ---
 
     def _download_artifact(self, run_id: str, output_filename_base: str) -> Path | None:
         """
@@ -280,7 +290,11 @@ class GitHubBackend(Backend):
         temp_dir = Path(tempfile.gettempdir())
         encrypted_file_path = temp_dir / f"{output_filename_base}.gpg"
         
+        # +++ GENERATE THE UNIQUE ID FOR THIS RUN +++
+        run_uuid = str(uuid.uuid4())
+        
         console.print(f"  Job Name: [bold magenta]{output_filename_base}[/bold magenta]")
+        console.print(f"  Run UUID: [bold magenta]{run_uuid}[/bold magenta]")
 
         release_tag = None
         run_id = None
@@ -318,6 +332,7 @@ class GitHubBackend(Backend):
             success = self._trigger_workflow_run(
                 ffmpeg_options_json=ffmpeg_options_json,
                 output_filename_base=output_filename_base,
+                run_uuid=run_uuid, # Pass the new UUID
                 release_tag=release_tag,
                 upload_url=upload_url
             )
@@ -327,7 +342,7 @@ class GitHubBackend(Backend):
                 return None
 
             # Phase 4: Monitor Workflow
-            run_id = self._monitor_workflow_run()
+            run_id = self._monitor_workflow_run(run_uuid=run_uuid) # Pass the new UUID
             
             if not run_id:
                 console.print("[bold red]Pipeline halted due to monitoring failure.[/bold red]")
