@@ -1,0 +1,151 @@
+# .github/workflows/armv1.yml
+# =========================================================
+# MODIFIED: Tailored for the CI Toolkit client application.
+# =========================================================
+
+name: "Gen 4.5_armv1"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_uuid:
+        description: "A unique identifier for this specific run."
+        required: true
+      ffmpeg_options:
+        description: 'JSON string containing the ffmpeg command: {"command": "..."}'
+        required: true
+      release_tag:
+        description: "The tag of the GitHub release holding the file (GitHub method)."
+        required: false
+      upload_url:
+        description: "The URL of the uploaded file (temp.sh method)."
+        required: false
+      output_filename_base:
+        description: "The unique base name for the output file, without extension."
+        required: true
+
+jobs:
+  compress-video:
+    name: Process Video - ${{ github.event.inputs.run_uuid }}
+    runs-on: ubuntu-24.04-arm
+
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      USER_GPG_RECIPIENT_ID: ${{ secrets.USER_GPG_RECIPIENT_ID }}
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "1. Install Core Dependencies (jq, curl)"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: "2. Install Latest FFmpeg Static Build (from BtbN)"
+        run: |
+          echo "Runner architecture is: ${{ runner.arch }}"
+
+          BASE_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+          if [ "${{ runner.arch }}" == "X64" ]; then
+            FFMPEG_FILENAME="ffmpeg-master-latest-linux64-gpl.tar.xz"
+          elif [ "${{ runner.arch }}" == "ARM64" ]; then
+            FFMPEG_FILENAME="ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+          else
+            echo "Error: Unsupported architecture: ${{ runner.arch }}"
+            exit 1
+          fi
+
+          DOWNLOAD_URL="$BASE_URL/$FFMPEG_FILENAME"
+          echo "Downloading FFmpeg from: $DOWNLOAD_URL"
+          curl -sL "$DOWNLOAD_URL" -o ffmpeg.tar.xz
+
+          echo "Extracting FFmpeg..."
+          tar -xf ffmpeg.tar.xz --strip-components=1
+
+          echo "Installing FFmpeg to /usr/local/bin/"
+          sudo mv ./bin/ffmpeg ./bin/ffprobe /usr/local/bin/
+
+      - name: "2A. Verify FFmpeg Version"
+        run: |
+          ffmpeg -version
+
+      - name: "3. Import GPG Keys"
+        env:
+          ACTION_GPG_PRIVATE_KEY: ${{ secrets.GPG_ACTION_PRIVATE_KEY }}
+          USER_GPG_PUBLIC_KEY: ${{ secrets.USER_GPG_PUBLIC_KEY }}
+        run: |
+          echo "Importing GPG keys..."
+          echo "$ACTION_GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "$USER_GPG_PUBLIC_KEY" | gpg --batch --import
+          echo "Key import complete. Verifying keys:"
+          gpg --list-keys
+
+      # --- CONDITIONAL DOWNLOAD BLOCK ---
+      - name: "3a. Get Input File (from GitHub Release)"
+        if: github.event.inputs.release_tag != ''
+        run: |
+          echo "-> Downloading asset from GitHub Release tag: ${{ github.event.inputs.release_tag }}"
+          gh release download "${{ github.event.inputs.release_tag }}" --pattern "*.gpg"
+          mv *.gpg encrypted_input.gpg
+          echo "-> Renamed downloaded asset to 'encrypted_input.gpg'."
+
+      - name: "3b. Get Input File (from temp.sh URL)"
+        if: github.event.inputs.upload_url != ''
+        run: |
+          echo "-> Downloading asset from URL: ${{ github.event.inputs.upload_url }}"
+          curl --fail -L -o encrypted_input.gpg "${{ github.event.inputs.upload_url }}"
+          echo "-> Download complete. File saved as 'encrypted_input.gpg'."
+
+      - name: "4. Decrypt Input File"
+        env:
+          ACTION_GPG_PASSPHRASE: ${{ secrets.GPG_ACTION_PASSPHRASE }}
+        run: |
+          echo "-> Decrypting 'encrypted_input.gpg' to 'decrypted_video.mp4'..."
+          gpg --quiet --batch --yes --pinentry-mode loopback --decrypt --passphrase "$ACTION_GPG_PASSPHRASE" \
+              --output decrypted_video.mp4 encrypted_input.gpg
+          echo "-> Decryption complete."
+
+      # ================================================================= #
+      # ===               MODIFIED LOGIC IS BELOW                     === #
+      # ================================================================= #
+
+      - name: "5. Compress Video using Client-Provided Command"
+        run: |
+          echo "-> Parsing FFmpeg command from client payload..."
+          # Extract the entire command string from the 'command' key in the JSON
+          COMMAND_STRING=$(echo '${{ github.event.inputs.ffmpeg_options }}' | jq -r '.command')
+
+          echo "-> Using command: $COMMAND_STRING"
+
+          # Define temporary and final filenames using the unique base name
+          TEMP_MP4="${{ github.event.inputs.output_filename_base }}.mp4"
+
+          echo "-> Encoding to temporary MP4: $TEMP_MP4"
+
+          # The shell will correctly split the COMMAND_STRING into arguments for ffmpeg
+          ffmpeg -i decrypted_video.mp4 \
+            $COMMAND_STRING \
+            -movflags +faststart \
+            "$TEMP_MP4"
+
+      - name: "5A. Encrypt the Result"
+        run: |
+          TEMP_MP4="${{ github.event.inputs.output_filename_base }}.mp4"
+          FINAL_ENCRYPTED_FILENAME="${{ github.event.inputs.output_filename_base }}.gpg"
+
+          echo "-> Encrypting $TEMP_MP4 -> $FINAL_ENCRYPTED_FILENAME for user"
+          gpg --quiet --batch --yes \
+              --encrypt --recipient "$USER_GPG_RECIPIENT_ID" --trust-model always \
+              --output "$FINAL_ENCRYPTED_FILENAME" \
+              "$TEMP_MP4"
+
+          # Clean up the unencrypted temporary file immediately after encryption
+          rm -f "$TEMP_MP4"
+
+      - name: "6. Upload Final Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.output_filename_base }}
+          path: ${{ github.event.inputs.output_filename_base }}.gpg
+          retention-days: 1
