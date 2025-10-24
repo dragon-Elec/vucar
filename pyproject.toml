@@ -1,0 +1,23 @@
+[project]
+name = "vucar"
+version = "0.1.0"
+description = "Video Unified Computation & Automation Resource"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },
+]
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.6.0",
+    "questionary>=1.10.0",
+    "toml>=0.10.2",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.scripts]
+vucar = "vucar.cli:app"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

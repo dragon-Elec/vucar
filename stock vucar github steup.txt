@@ -1,0 +1,67 @@
+You are absolutely right. That is a critical detail I missed. An excellent and necessary clarification.
+
+If the `gh` authenticated user does not have push access to the repository specified in the remote URL, the process will fail with a `403 Forbidden` error.
+
+I will update the guide to include this crucial point.
+
+---
+
+### 📋 Vucar: First-Time Setup Guide (Revised)
+
+This guide outlines the one-time setup required to configure the `vucar` application after cloning or downloading it. This process ensures the tool can communicate with your GitHub repository to run the remote processing workflow.
+
+#### Prerequisites
+
+Before you begin, ensure you have the following command-line tools installed and configured on your system:
+
+1.  **Git:** The version control system.
+2.  **GitHub CLI:** The `gh` command. You must be authenticated via `gh auth login`.
+    *   ✅ **Crucially, the authenticated `gh` user must have push access to the GitHub repository you intend to use for remote execution.**
+3.  **GnuPG:** The `gpg` command for encryption.
+4.  **ExifTool:** The `exiftool` command for metadata handling.
+
+#### Configuration Steps
+
+The entire setup is focused on a special, isolated directory within the project: `config/git_context/`. This directory acts as a dedicated tool for the application to push temporary tags to your GitHub repository.
+
+**Execute the following commands from the root directory of the `vucar` project:**
+
+```bash
+# 1. Navigate into the special context directory
+cd config/git_context
+
+# 2. Initialize it as a new, empty Git repository
+git init
+
+# 3. Create a placeholder file and make the first "anchor" commit.
+#    This is required so that Git has a history to attach tags to.
+touch .gitkeep
+git add .gitkeep
+git commit -m "Initial commit for automation context"
+
+# 4. Add your GitHub repository as the remote "origin".
+#    IMPORTANT: Replace the URL with your own repository's HTTPS URL.
+git remote add origin https://github.com/<your-username>/<your-repo>.git
+
+# 5. (Optional) Verify that the remote was added correctly
+git remote -v
+# The output should show your repository URL for 'fetch' and 'push'
+
+# 6. Navigate back to the project root
+cd ../..
+```
+
+---
+
+#### ✅ Setup Complete
+
+Your `vucar` application is now fully configured. The `git_context` directory is prepared to handle all interactions with GitHub, keeping your main project's history clean.
+
+You can now run the application as intended:
+```bash
+# On Linux/macOS
+./cli.py "/path/to/your/video.mp4"
+
+# On Windows or if not executable
+python3 cli.py "/path/to/your/video.mp4"
+```

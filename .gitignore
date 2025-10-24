@@ -1,2 +1,3 @@
 config/git_context
 config/*.toml
+__pycache__/
