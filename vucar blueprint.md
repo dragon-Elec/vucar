@@ -1,144 +1,95 @@
-## **Project Blueprint Template: `vucar`** 
+# **Project Blueprint: `vucar`**
 **V**ideo **U**nified **C**omputation & **A**utomation **R**esource
+
+*Document Version: 2.0 (Post-Refactor)*
+*Last Updated: 2025*
+
+---
 
 ### 🏛️ **1. Project Overview & Core Mission**
 
-*   **Problem Statement:** (What specific problem is this project trying to solve? Who is it for?)
-    > The current video processing toolkit is a monolithic script tightly coupled to a single, complex workflow (GitHub Actions). This makes it inflexible for different use cases, such as quick, local processing on low-power devices (SBCs, Termux), and makes adding new execution methods (e.g., via SSH) difficult and risky.
+*   **Problem Statement:** Processing large video files is computationally expensive and time-consuming. Users often need to choose between tying up their local machine for hours or navigating complex cloud/CI setups. There is a need for a unified tool that can manage and delegate these heavy tasks to the most appropriate environment, whether it's the local machine or a powerful remote executor.
 
-*   **Mission Statement:** (A concise, one-sentence summary of the project's purpose and goal.)
-    > To refactor the toolkit into a modular, backend-driven framework that allows users to seamlessly execute video processing tasks on different environments, from local machines to remote CI/CD pipelines.
+*   **Mission Statement:** To provide a flexible, backend-driven framework that allows users to seamlessly execute video processing tasks on different environments, from local machines to remote CI/CD pipelines, through a single, intuitive command-line interface.
 
-*   **Key Objectives / Success Criteria (End State):** (A short, bulleted list of what a "finished" project looks like.)
-    1.  [COMPLETED] A `core` library exists, containing all shared, reusable logic (GPG, FFmpeg command generation, video analysis) completely decoupled from any execution environment.
-    2.  [COMPLETED] At least two "Execution Backends" are functional: `local` (for SBCs/Termux) and `github` (for the existing CI workflow). But for the current refactors main purpose is to focous on github ci/cd pipeline.
-    3.  [COMPLETED] A single, unified Command-Line Interface (`cli.py`) can intelligently select and delegate tasks to the appropriate backend.
-    4.  [COMPLETED] The codebase is modular, making the addition of a third backend (e.g., `ssh`) a straightforward and isolated task.
+*   **Key Features:**
+    1.  **Dual Execution Backends:** Supports both local (`ffmpeg` on the user's machine) and remote (`GitHub Actions`) processing.
+    2.  **Unified CLI:** A single, powerful command (`vucar run`) controls all operations, regardless of the chosen backend.
+    3.  **Secure Remote Workflow:** Implements an end-to-end GPG encryption pipeline for the GitHub backend, ensuring video content is never exposed in the remote environment.
+    4.  **Extensible Architecture:** Designed from the ground up to easily accommodate new backends (e.g., SSH, other CI services) with minimal effort.
+    5.  **User-Friendly Interaction:** Uses clear, interactive prompts to guide users through selecting presets and finalizing commands.
 
 ### 🧭 **2. Guiding Principles & Design Philosophy**
 
-(The core values that will guide technical decisions throughout the project.)
-
-*   **Clear Separation of Concerns:** The user-facing CLI (`cli.py`) is a controller. The Execution Backends (`backends/`) are engines. The Core Tools (`core/`) are a shared toolbox. No module will perform the job of another.
-*   **Pluggable, Backend-Oriented Architecture:** The application will interact with a generic `Backend` interface. This ensures that the controller can use any backend without knowing its internal implementation details, making them truly swappable.
-*   **Pragmatic Modularity:** Code will be organized into modules based on clear, distinct responsibilities. Abstractions will only be created to support the backend-driven design, avoiding unnecessary complexity.
-*   **CLI-First User Experience:** The primary interface is the command line. It must be powerful, intuitive, and provide clear feedback. All user interaction logic will be centralized in the `ui` module.
-*   **Stateless Execution:** Each backend task will be treated as a self-contained, stateless job. This enhances reliability and predictability, as no run will depend on the state left by a previous one.
+*   **Clear Separation of Concerns:** The application is divided into three distinct layers: a user-facing CLI controller (`cli.py`, `ui/`), swappable execution "engines" (`backends/`), and a shared toolbox of utilities (`core/`). No module performs the job of another.
+*   **Pluggable, Backend-Oriented Architecture:** The application interacts with a generic `Backend` interface. This ensures the controller can use any backend without knowing its internal implementation, making them truly swappable.
+*   **Pragmatic Modularity:** Code is organized into modules based on clear, distinct responsibilities. Abstractions exist solely to support the backend-driven design, avoiding unnecessary complexity.
+*   **CLI-First User Experience:** The primary interface is the command line. It is designed to be powerful, intuitive, and provide clear, color-coded feedback for all operations.
+*   **Stateless Execution:** Each backend task is treated as a self-contained, stateless job. This enhances reliability and predictability, as no run depends on the state left by a previous one.
 
 ### 🏗️ **3. Core Architecture & Project Structure**
 
-(A high-level overview of the architecture and a proposed file/directory structure.)
-
 #### **Architectural Model:**
 
-This project will follow a **3-Layer (Application-Service-Core)** architecture to ensure maintainability and scalability. The layers are:
-1.  **The Core/Toolbox Layer (`vucar/core/`):** Standalone, reusable functions for specific tasks (GPG, video analysis). It is completely unaware of where or how it will be used.
-2.  **The Service/Backend Layer (`vucar/backends/`):** This layer provides the actual execution services. It uses tools from the Core layer to implement a specific workflow (e.g., the `GitHubBackend` orchestrates encryption, uploading, and monitoring).
-3.  **The Application/Presentation Layer (`vucar/cli.py` & `vucar/ui/`):** The user-facing CLI. It captures user intent and delegates the job to the appropriate service backend.
+This project follows a **3-Layer (Application-Service-Core)** architecture:
+1.  **The Core/Toolbox Layer (`vucar/core/`):** Standalone, reusable functions for specific tasks (GPG, video analysis, FFmpeg command building). It is completely unaware of where or how it will be used.
+2.  **The Service/Backend Layer (`vucar/backends/`):** Provides the actual execution services. It uses tools from the Core layer to implement a specific workflow (e.g., the `GitHubBackend` orchestrates encryption, uploading, and monitoring).
+3.  **The Application/Presentation Layer (`cli.py` & `vucar/ui/`):** The user-facing CLI. It captures user intent and delegates the job to the appropriate service backend.
 
-#### **Proposed Directory Structure:**
+#### **Directory Structure:**
 
 ```
 vucar/
-├── pyproject.toml              # Project dependencies, metadata, and configuration (single source of truth)
+├── pyproject.toml              # Project dependencies and metadata
 ├── README.md
 ├── vucar blueprint.md
-├── __main__.py                 # Main entry point for `python -m vucar`. A thin wrapper that calls the CLI.
 ├── cli.py                      # Layer 3: The Application Controller (Typer CLI)
+├── __main__.py                 # Allows running the module via `python -m vucar`
 │
-├── config/               # Configuration files
-│   ├── config.toml       # User-specific configuration
-│   ├── presets.toml      # FFmpeg command presets
-│   └── git_context/      # Isolated git environment for remote operations
+├── config/
+│   ├── config.toml             # User-specific configuration (repo, GPG keys)
+│   └── presets.toml            # FFmpeg command presets
 │
-├── core/                 # Layer 1: The Core Toolbox (Shared Logic)
-│   ├── __init__.py
-│   ├── config.py         # Configuration loading and validation
-│   ├── ffmpeg.py         # FFmpeg command building, splitting logic ("swiss knife")
-│   ├── security.py       # GPG encryption/decryption functions
-│   └── video.py          # Video file analysis (size, metadata)
+├── core/                       # Layer 1: The Core Toolbox (Shared Logic)
+│   ├── config.py               # Configuration loading functions
+│   ├── ffmpeg.py               # FFmpeg command building and validation
+│   ├── security.py             # GPG encryption/decryption functions
+│   └── video.py                # Video file analysis (size, metadata)
 │
-├── backends/             # Layer 2: The Execution Engines (Backends)
-│   ├── __init__.py
-│   ├── base.py           # Defines the abstract "Backend" interface contract
-│   ├── github.py         # The GitHub Actions workflow implementation
-│   └── local.py          # The local machine execution implementation
+├── backends/                   # Layer 2: The Execution Engines (Backends)
+│   ├── base.py                 # Defines the abstract "Backend" interface contract
+│   ├── github.py               # The GitHub Actions workflow implementation
+│   └── local.py                # The local machine execution implementation
 │
-└── ui/                   # Layer 3: User Interaction Components
-    ├── __init__.py
-    └── prompts.py        # Interactive prompts using questionary
+└── ui/                         # Layer 3: User Interaction Components
+    └── prompts.py              # Interactive prompts using `questionary`
 ```
 
-### 🧩 **4. Component Breakdown**
+### 🚀 **4. Phased Development Plan & Roadmap**
 
-(A more detailed look at the key modules from the structure above.)
+*   **Phase 1: Foundation & Refinement (Active)**
+    *   **Goal:** Solidify the core architecture and improve robustness.
+    *   **Tasks:**
+        1.  **Enhance FFmpeg Core:** Expand `core/ffmpeg.py` to include advanced logic, such as command validation and intelligent splitting for large files (lossless cutting).
+        2.  **Improve Error Reporting:** Ensure all backends capture and display `stderr` on failure for easier debugging.
+        3.  **Configuration Validation:** Implement robust checking in `core/config.py` to provide clear errors for missing or malformed user configs.
 
-*   **`core/` (The Toolbox):**
-    *   **`ffmpeg.py`:** Will contain functions to build and validate FFmpeg command strings. This is where the future "lossless cutting" logic for large files will be implemented.
-    *   **`security.py`:** Contains generic, reusable functions for GPG encryption (`sanitize_and_encrypt_video`) and decryption (`decrypt_file`). It is a core utility and does not contain any backend-specific logic.
-    *   **`video.py`:** Will contain functions like `get_file_size` and `restore_metadata` that use tools like `exiftool`.
-
-*   **`backends/` (The Engines):**
-    *   **`base.py`:** Will define an Abstract Base Class `Backend` with a method signature like `execute(video_path: Path, command: str)`. All other backends *must* inherit from this and implement this method.
-    *   **`github.py`:** Will contain a `GitHubBackend` class. It handles all backend-specific logic for the GitHub Actions workflow, including uploading files, triggering and monitoring the run, and downloading the resulting artifact using the `gh` CLI.
-    *   **`local.py`:** Will contain a `LocalBackend` class. Its `execute` method will be very simple: it will just run the provided FFmpeg command as a local subprocess.
-    *   **`ssh.py` (Future):** Will contain an `SshBackend` class. It will manage connecting to a remote server, transferring files via SFTP, executing the command remotely, and downloading the result. It will rely on a library like `paramiko`.
-
-*   **`cli.py` (The Controller):**
-    *   This is the main Typer application. It will have a command like `run` that accepts a `--backend` option. Based on this option, it will instantiate either `GitHubBackend` or `LocalBackend` and then call its `.execute()` method, passing along the user's inputs.
-
-### 🚀 **5. Phased Development Plan**
-
-(Documenting the project's development through its completed and ongoing phases.)
-
-*   **Phase 1: Minimum Viable Refactor (MVR)** (Completed)
-    *   **Goal:** Achieved existing functionality with the new, modular architecture.
-    *   **Features:**
-        1.  Implemented the `core` library by migrating existing helper functions (`get_file_size`, `encrypt`, etc.).
-        2.  Implemented the `LocalBackend` first; it is the simplest and easiest to test.
-        3.  Implemented the `GitHubBackend` by migrating the remaining logic from `pipeline.py`.
-        4.  Built the new `cli.py` controller that can select and run either backend.
-
-*   **Phase 2: Core Feature Expansion**
-    *   **Goal:** Add the "swiss knife" lossless cutting feature and improve robustness.
-    *   **Features:**
-        1.  Implement the file size check and command-splitting logic in `core/ffmpeg.py`.
-        2.  Integrate this new logic into the `base.py` contract so both `LocalBackend` and `GitHubBackend` can use it.
-        3.  Refine the configuration system in `core/config.py` to support backend-specific settings.
-
-*   **Phase 3: Remote Execution via SSH**
-    *   **Goal:** Enable processing on a user-defined remote server without relying on GitHub.
-    *   **Features:**
-        1.  Add `paramiko` or a similar library as a project dependency.
-        2.  Implement the `SshBackend` class in `backends/ssh.py`.
+*   **Phase 2: Remote Execution via SSH (Next)**
+    *   **Goal:** Enable processing on a user-defined remote server without relying on GitHub Actions.
+    *   **Tasks:**
+        1.  Implement a new `SshBackend` in `backends/ssh.py` using a library like `paramiko`.
+        2.  The backend will manage SFTP file transfers, remote command execution, and result retrieval.
         3.  Add a `[backend.ssh]` section to `config.toml` for connection parameters (host, user, key_filename).
-        4.  Update `cli.py` to recognize and instantiate the `SshBackend`.
 
-*   **Beyond: Long-Term Vision**
-    *   Full Termux compatibility and testing.
-    *   A plugin system for user-contributed backends or processing steps.
+*   **Phase 3: Advanced Features & Usability (Future)**
+    *   **Goal:** Expand `vucar`'s capabilities and make it more accessible.
+    *   **Potential Features:**
+        1.  **Termux Compatibility:** Test and adjust for full compatibility with the Termux environment on Android.
+        2.  **Plugin System:** Design a system for user-contributed backends or pre/post-processing steps.
+        3.  **Configuration Wizard:** Create a `vucar setup` command to interactively generate the initial `config.toml`.
 
-### 📈 **6. Development & Execution Plan**
+### ⚠️ **5. Potential Challenges & Risk Assessment**
 
-(The step-by-step process followed during development. These steps have been largely executed during the refactoring phase.)
-
-1.  **Setup:** Created the new directory structure. Initialized a Git repository. Set up a `venv` and a `pyproject.toml` (using a tool like Poetry or Flit is recommended).
-2.  **Build the Core Toolbox First:** Isolated the pure helper functions from the old project and moved them into the `core/` modules. Wrote simple, standalone test scripts for each function (e.g., a `test_encrypt.py`) to prove they work in isolation.
-3.  **Build the Simplest Backend:** Implemented the `LocalBackend`. Wrote a test script that directly imports and runs `LocalBackend().execute()` to confirm it can process a video on the machine.
-4.  **Build the Application Controller:** Created the `cli.py` Typer application. Wired it up to *only* use the `LocalBackend` for now. Tested the end-to-end flow for a local job.
-5.  **Integrate the Complex Backend:** Moved the GitHub Actions logic into the `GitHubBackend`. Updated `cli.py` to allow selecting between the local and GitHub backends.
-6.  **Test, Refactor, Repeat:** Thoroughly test both end-to-end workflows. Refactor to remove any duplicated code and ensure adherence to the design principles.
-
-### ⚠️ **7. Potential Challenges & Risk Assessment**
-
-(Thinking ahead about what could go wrong.)
-
-*   **Technical Risks:**
-    *   The FFmpeg logic for lossless cutting (`-c copy`) can be complex and codec-dependent; it will require careful implementation and testing.
-    *   Termux environment might have different binary paths or permissions, requiring platform-specific checks.
-    *   Robust subprocess management (handling errors, streaming output) for the `LocalBackend` needs to be carefully designed to provide good user feedback.
-    *   **SSH Credential Management:** The `SshBackend` will need secure access to private keys or credentials. The implementation must avoid storing secrets in plain text and should rely on standard methods like SSH agents or encrypted key files with passphrases.
-
-*   **Logistical Risks:**
-    *   Refactoring is a significant undertaking. There is a risk of getting bogged down mid-way if the phased plan is not followed.
-    *   As a solo project, time is the primary constraint. Sticking to the MVP scope for Phase 1 is critical to avoid burnout.
+*   **FFmpeg Complexity:** Advanced FFmpeg features like filter graphs or lossless cutting can be codec-dependent and require careful implementation and extensive testing.
+*   **SSH Credential Management:** The `SshBackend` will require secure access to private keys or credentials. The implementation must avoid storing secrets in plain text and should rely on standard methods like SSH agents.
+*   **Environment Differences:** Ensuring consistent behavior across different environments (Linux desktop, Termux, macOS) may require platform-specific checks for binary paths or permissions.
