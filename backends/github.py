@@ -226,97 +226,98 @@ class GitHubBackend(Backend):
 
     # --- MODIFICATION END: _trigger_workflow_run ---
 
-    # --- REPLACEMENT START: _monitor_workflow_run ---
     def _monitor_workflow_run(self, run_uuid: str) -> str | None:
         """
-        Waits for the specific workflow run, identified by its UUID, to appear and complete.
-        This is a reliable method that avoids race conditions.
-        Returns the run ID on success.
+        Locates a workflow run by its UUID in the run-name, then polls for completion
+        while providing single-line status updates. This method is race-condition-proof
+        and resilient to network failures.
         """
         console.print(
-            f"  -> ⏳ Locating and monitoring workflow run ([bold magenta]{run_uuid}[/bold magenta])..."
+            f"  -> ⏳ Locating workflow run with UUID [bold magenta]{run_uuid}[/bold magenta]..."
         )
 
         run_id = None
-        # We will try for up to 60 seconds to find the run after triggering it.
-        max_find_retries, find_delay = 12, 5
+        # Phase 1: Locate the Run ID using the UUID.
+        max_find_attempts = 24  # Try for ~2 minutes
+        find_interval = 5
 
-        # Phase 1: Find the run ID using the UUID. The workflow needs a few seconds to be created.
-        for attempt in range(1, max_find_retries + 1):
+        for attempt in range(1, max_find_attempts + 1):
             try:
-                # This command is the core of the solution. It asks the GitHub API for runs
-                # and uses `jq` to filter for the one whose name contains our unique ID.
                 find_cmd = [
-                    "gh",
-                    "api",
-                    f"repos/{self.repo}/actions/runs",
+                    "gh", "api",
+                    f"repos/{self.repo}/actions/workflows/{self.workflow_file}/runs?event=workflow_dispatch&per_page=20",
                     "--jq",
-                    f'.workflow_runs[] | select(.name | contains("{run_uuid}")) | .id',
+                    f'.workflow_runs[] | select(.name | contains("{run_uuid}")) | .id'
                 ]
+                result = subprocess.run(find_cmd, capture_output=True, text=True)
 
-                result = subprocess.run(
-                    find_cmd, capture_output=True, text=True, check=True
-                )
-                found_id = result.stdout.strip()
+                if result.returncode == 0 and result.stdout.strip():
+                    run_id = result.stdout.strip().split('\n')[0]
+                    console.print(f"     [green]Confirmed Run ID:[/green] {run_id}")
+                    try:
+                        url_cmd = ["gh", "run", "view", run_id, "--repo", self.repo, "--json", "url", "-q", ".url"]
+                        run_url = subprocess.check_output(url_cmd, text=True).strip()
+                        console.print(f"     [dim]URL: {run_url}[/dim]")
+                    except subprocess.CalledProcessError:
+                        pass
+                    break
 
-                if found_id:
-                    run_id = found_id
-                    console.print(f"     [green]Located Run ID:[/green] {run_id}")
-                    # Get the URL for user convenience
-                    run_url_cmd = [
-                        "gh",
-                        "run",
-                        "view",
-                        run_id,
-                        "--repo",
-                        self.repo,
-                        "--json",
-                        "url",
-                        "-q",
-                        ".url",
-                    ]
-                    run_url = subprocess.check_output(run_url_cmd, text=True).strip()
-                    console.print(f"     [dim]URL: {run_url}[/dim]")
-                    break  # Exit the loop once the run is found
+                time.sleep(find_interval)
+                if attempt % 4 == 0:
+                    console.print(f"     [dim]Still looking for the triggered job... (attempt {attempt})[/dim]")
 
-                time.sleep(find_delay)  # Wait and retry if not found yet
-
-            except subprocess.CalledProcessError as e:
-                console.print(
-                    f"[yellow]Searching for run (attempt {attempt})...[/yellow]"
-                )
-                time.sleep(find_delay)
+            except Exception as e:
+                console.print(f"[yellow]Warning during run lookup: {e}[/yellow]")
+                time.sleep(find_interval)
 
         if not run_id:
-            console.print(
-                "[bold red]Fatal: Could not find the triggered workflow run after multiple attempts.[/bold red]"
-            )
+            console.print("\n[bold red]Fatal: Could not locate the triggered workflow run.[/bold red]")
+            console.print("[yellow]Check: Is the workflow's YML file updated with 'run-name: ... ${{ inputs.run_uuid }}'?[/yellow]")
             return None
 
-        # Phase 2: Now that we have the correct ID, watch it to completion.
-        try:
-            console.print(
-                "     [dim]Run located. Watching for completion... (This may take a while)[/dim]"
-            )
-            watch_cmd = [
-                "gh",
-                "run",
-                "watch",
-                run_id,
-                "--repo",
-                self.repo,
-                "--exit-status",
-            ]
-            subprocess.run(watch_cmd, check=True)
-            console.print("     [green]Workflow finished.[/green]")
-            return run_id
-        except subprocess.CalledProcessError:
-            console.print(
-                "[bold red]Workflow run failed. See the link above for details.[/bold red]"
-            )
-            return None
+        # Phase 2: Enhanced Polling for Completion status.
+        poll_interval = 15 # Check more frequently for better UX
+        console.print(f"  -> 👁️‍🗨️ Monitoring Run {run_id}...")
 
-    # --- REPLACEMENT END: _monitor_workflow_run ---
+        while True:
+            try:
+                status_cmd = [
+                    "gh", "run", "view", run_id, "--repo", self.repo,
+                    "--json", "status,conclusion,jobs"
+                ]
+                result = subprocess.run(status_cmd, capture_output=True, text=True, check=True)
+                data = json.loads(result.stdout)
+
+                status = data.get("status")
+                conclusion = data.get("conclusion")
+
+                if status == "completed":
+                    # Clear the status line before printing final message
+                    print(" " * 80, end="\r")
+                    if conclusion == "success":
+                        console.print("     [bold green]✅ Workflow completed successfully.[/bold green]")
+                        return run_id
+                    else:
+                        console.print(f"     [bold red]❌ Workflow failed (Conclusion: {conclusion}).[/bold red]")
+                        return None
+
+                # Find the current step for better user feedback
+                current_step_name = "..."
+                if status == "in_progress" and data.get("jobs"):
+                    job = data["jobs"][0]
+                    for step in job.get("steps", []):
+                        if step.get("status") == "in_progress":
+                            current_step_name = step.get("name")
+                            break
+                
+                # Print updating status line
+                status_text = f"  -> 🗘 [bold yellow]Status:[/] {status}  [bold yellow]Step:[/] {current_step_name}"
+                console.print(status_text, end="\r")
+
+            except (subprocess.CalledProcessError, json.JSONDecodeError):
+                console.print("  -> 🚧 [dim](network issue, retrying...)[/dim]", end="\r")
+
+            time.sleep(poll_interval)
 
     def _download_artifact(self, run_id: str, output_filename_base: str) -> Path | None:
         """
